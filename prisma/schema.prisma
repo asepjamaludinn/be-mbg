@@ -1,0 +1,118 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Looking for ways to speed up your queries, or scale easily with your serverless or edge functions?
+// Try Prisma Accelerate: https://pris.ly/cli/accelerate-init
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+enum Role {
+  ADMIN_PUSAT
+  ADMIN_CABANG
+  KURIR
+}
+
+enum RequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  SHIPPED
+  RECEIVED
+}
+
+enum DistributionStatus {
+  DIKIRIM
+  DITERIMA
+  WADAH_BELUM_KEMBALI
+  WADAH_KEMBALI
+}
+
+model User {
+  id        Int      @id @default(autoincrement())
+  email     String   @unique
+  password  String
+  name      String
+  role      Role
+  branchId  Int?
+  branch    Branch?  @relation(fields: [branchId], references: [id])
+  createdAt DateTime @default(now())
+}
+
+model Branch {
+  id            Int            @id @default(autoincrement())
+  name          String
+  address       String
+  users         User[]
+  stocks        Stock[]
+  requests      Request[]
+  distributions Distribution[]
+}
+
+model Material {
+  id           Int           @id @default(autoincrement())
+  name         String
+  unit         String
+  stocks       Stock[]
+  requestItems RequestItem[]
+}
+
+model Stock {
+  id         Int      @id @default(autoincrement())
+  materialId Int
+  branchId   Int?
+  qty        Float    @default(0)
+  material   Material @relation(fields: [materialId], references: [id])
+  branch     Branch?  @relation(fields: [branchId], references: [id])
+
+  @@unique([materialId, branchId])
+}
+
+model Request {
+  id          Int           @id @default(autoincrement())
+  branchId    Int
+  branch      Branch        @relation(fields: [branchId], references: [id])
+  status      RequestStatus @default(PENDING)
+  requestDate DateTime      @default(now())
+  items       RequestItem[]
+  notes       String?
+}
+
+model RequestItem {
+  id         Int      @id @default(autoincrement())
+  requestId  Int
+  materialId Int
+  qty        Float
+  request    Request  @relation(fields: [requestId], references: [id])
+  material   Material @relation(fields: [materialId], references: [id])
+}
+
+model School {
+  id            Int            @id @default(autoincrement())
+  name          String
+  address       String
+  distributions Distribution[]
+}
+
+model Distribution {
+  id       Int    @id @default(autoincrement())
+  branchId Int
+  schoolId Int
+  branch   Branch @relation(fields: [branchId], references: [id])
+  school   School @relation(fields: [schoolId], references: [id])
+
+  containerCount Int
+  sentAt         DateTime           @default(now())
+  status         DistributionStatus @default(DIKIRIM)
+
+  returnedAt  DateTime?
+  courierName String?
+}
