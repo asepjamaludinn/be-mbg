@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { CreateMaterialDto } from './dto/create-material.dto';
 import { UpdateMaterialDto } from './dto/update-material.dto';
-import { PrismaService } from 'src/prisma/prisma.service';
+import { PrismaService } from '../prisma/prisma.service';
 
 @Injectable()
 export class MaterialsService {
@@ -17,18 +17,18 @@ export class MaterialsService {
     return this.prisma.material.findMany();
   }
 
-  findOne(id: number) {
+  findOne(id: string) {
     return this.prisma.material.findUnique({ where: { id } });
   }
 
-  update(id: number, updateMaterialDto: UpdateMaterialDto) {
+  update(id: string, updateMaterialDto: UpdateMaterialDto) {
     return this.prisma.material.update({
       where: { id },
       data: updateMaterialDto,
     });
   }
 
-  remove(id: number) {
+  remove(id: string) {
     return this.prisma.material.delete({ where: { id } });
   }
 }

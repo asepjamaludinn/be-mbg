@@ -33,86 +33,149 @@ enum DistributionStatus {
   DIKIRIM
   DITERIMA
   WADAH_BELUM_KEMBALI
-  WADAH_KEMBALI
+  WADAH_KEMBALI_SEBAGIAN
+  SELESAI
 }
 
 model User {
-  id        Int      @id @default(autoincrement())
-  email     String   @unique
-  password  String
-  name      String
-  role      Role
-  branchId  Int?
-  branch    Branch?  @relation(fields: [branchId], references: [id])
+  id       String  @id @default(uuid())
+  email    String  @unique
+  password String
+  name     String
+  role     Role
+  isActive Boolean @default(true)
+
+  branchId String?
+  branch   Branch? @relation(fields: [branchId], references: [id])
+
+  otpHash      String?
+  otpExpiresAt DateTime?
+
   createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  activities        LogActivity[]
+  processedRequests Request[]     @relation("ApproverUser")
 }
 
 model Branch {
-  id            Int            @id @default(autoincrement())
-  name          String
-  address       String
+  id       String  @id @default(uuid())
+  name     String
+  address  String
+  isCenter Boolean @default(false)
+  isActive Boolean @default(true)
+
   users         User[]
   stocks        Stock[]
   requests      Request[]
   distributions Distribution[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model Material {
-  id           Int           @id @default(autoincrement())
-  name         String
-  unit         String
+  id   String @id @default(uuid())
+  name String
+  unit String
+
   stocks       Stock[]
   requestItems RequestItem[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model Stock {
-  id         Int      @id @default(autoincrement())
-  materialId Int
-  branchId   Int?
-  qty        Float    @default(0)
-  material   Material @relation(fields: [materialId], references: [id])
-  branch     Branch?  @relation(fields: [branchId], references: [id])
+  id         String @id @default(uuid())
+  materialId String
+  branchId   String
+  qty        Float  @default(0)
+
+  material Material @relation(fields: [materialId], references: [id])
+  branch   Branch   @relation(fields: [branchId], references: [id])
+
+  updatedAt DateTime @updatedAt
 
   @@unique([materialId, branchId])
+  @@index([branchId])
 }
 
 model Request {
-  id          Int           @id @default(autoincrement())
-  branchId    Int
-  branch      Branch        @relation(fields: [branchId], references: [id])
+  id       String @id @default(uuid())
+  code     String @unique
+  branchId String
+  branch   Branch @relation(fields: [branchId], references: [id])
+
   status      RequestStatus @default(PENDING)
   requestDate DateTime      @default(now())
-  items       RequestItem[]
-  notes       String?
+
+  items RequestItem[]
+  notes String?
+
+  processedById String?
+  processedBy   User?     @relation("ApproverUser", fields: [processedById], references: [id])
+  processedAt   DateTime?
+
+  updatedAt DateTime @updatedAt
+
+  @@index([status])
+  @@index([requestDate])
 }
 
 model RequestItem {
-  id         Int      @id @default(autoincrement())
-  requestId  Int
-  materialId Int
-  qty        Float
-  request    Request  @relation(fields: [requestId], references: [id])
-  material   Material @relation(fields: [materialId], references: [id])
+  id         String @id @default(uuid())
+  requestId  String
+  materialId String
+
+  qty         Float
+  qtyApproved Float?
+
+  request  Request  @relation(fields: [requestId], references: [id], onDelete: Cascade)
+  material Material @relation(fields: [materialId], references: [id])
 }
 
 model School {
-  id            Int            @id @default(autoincrement())
-  name          String
-  address       String
+  id       String  @id @default(uuid())
+  name     String
+  address  String
+  isActive Boolean @default(true)
+
   distributions Distribution[]
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 }
 
 model Distribution {
-  id       Int    @id @default(autoincrement())
-  branchId Int
-  schoolId Int
-  branch   Branch @relation(fields: [branchId], references: [id])
-  school   School @relation(fields: [schoolId], references: [id])
+  id       String @id @default(uuid())
+  branchId String
+  schoolId String
 
-  containerCount Int
-  sentAt         DateTime           @default(now())
-  status         DistributionStatus @default(DIKIRIM)
+  branch Branch @relation(fields: [branchId], references: [id])
+  school School @relation(fields: [schoolId], references: [id])
+
+  containerCount    Int
+  returnedContainer Int @default(0)
+
+  sentAt DateTime           @default(now())
+  status DistributionStatus @default(DIKIRIM)
 
   returnedAt  DateTime?
   courierName String?
+
+  @@index([status])
+}
+
+model LogActivity {
+  id      String @id @default(uuid())
+  userId  String
+  action  String
+  details Json?
+
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([createdAt])
 }
