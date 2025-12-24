@@ -1,14 +1,18 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
 import { UsersService } from '../users/users.service';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
+import * as crypto from 'crypto';
 import { MailerService } from '@nestjs-modules/mailer';
 import { PrismaService } from '../prisma/prisma.service';
 import { ChangePasswordDto } from './dto/change-password.dto';
+import { ResetPasswordDto } from './dto/reset-password.dto';
+import { ConfigService } from '@nestjs/config';
 
 @Injectable()
 export class AuthService {
@@ -17,103 +21,242 @@ export class AuthService {
     private jwtService: JwtService,
     private mailerService: MailerService,
     private prisma: PrismaService,
+    private configService: ConfigService,
   ) {}
 
   async login(email: string, pass: string) {
     const user = await this.usersService.findOneByEmail(email);
-    if (!user) {
-      throw new UnauthorizedException('Email tidak ditemukan');
-    }
+    if (!user) throw new UnauthorizedException('Email tidak ditemukan');
 
     const isMatch = await bcrypt.compare(pass, user.password);
-    if (!isMatch) {
-      throw new UnauthorizedException('Password salah');
-    }
+    if (!isMatch) throw new UnauthorizedException('Password salah');
 
     if (!user.isActive) {
-      throw new UnauthorizedException(
-        'Akun Anda telah dinonaktifkan. Hubungi admin.',
-      );
+      throw new UnauthorizedException('Akun Anda telah dinonaktifkan.');
     }
 
-    return this.generateToken(user);
+    const tokens = await this.getTokens(user.id, user.email, user.role);
+    await this.updateRefreshTokenHash(user.id, tokens.refresh_token);
+
+    return {
+      user: {
+        id: user.id,
+        name: user.name,
+        role: user.role,
+        branchId: user.branchId,
+        profilePicture: user.profilePicture,
+      },
+      backendTokens: tokens,
+    };
   }
 
-  async requestOtp(email: string) {
+  async logout(userId: string) {
+    await this.prisma.user.updateMany({
+      where: { id: userId, refreshToken: { not: null } },
+      data: { refreshToken: null },
+    });
+    return { message: 'Logout berhasil' };
+  }
+
+  async refreshTokens(userId: string, rt: string) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { id: true, email: true, role: true, refreshToken: true },
+    });
+
+    if (!user || !user.refreshToken)
+      throw new ForbiddenException('Akses ditolak (No Token)');
+
+    const rtMatches = await bcrypt.compare(rt, user.refreshToken);
+    if (!rtMatches) throw new ForbiddenException('Refresh token tidak valid');
+
+    const tokens = await this.getTokens(user.id, user.email, user.role);
+    await this.updateRefreshTokenHash(user.id, tokens.refresh_token);
+
+    return tokens;
+  }
+
+  async forgotPassword(email: string) {
     const user = await this.usersService.findOneByEmail(email);
-    if (!user) throw new UnauthorizedException('Email tidak terdaftar');
 
-    if (!user.isActive) throw new UnauthorizedException('Akun non-aktif');
+    const genericResponse = {
+      message:
+        'Jika email terdaftar, instruksi reset password telah dikirim.',
+    };
 
-    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    if (!user) return genericResponse;
 
-    const salt = await bcrypt.genSalt();
-    const otpHash = await bcrypt.hash(otp, salt);
+    const resetTokenPlain = crypto.randomBytes(32).toString('hex');
 
-    const expiration = new Date();
-    expiration.setMinutes(expiration.getMinutes() + 5);
+    const resetTokenHash = await bcrypt.hash(resetTokenPlain, 10);
+
+    const expiry = new Date();
+    expiry.setMinutes(expiry.getMinutes() + 15);
+
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        await tx.user.update({
+          where: { id: user.id },
+          data: {
+            resetToken: resetTokenHash,
+            resetTokenExpiresAt: expiry,
+          },
+        });
+
+        const frontendUrl =
+          this.configService.get('FRONTEND_URL') || 'http://localhost:3000';
+        // Kirim Token MENTAH ke URL
+        const resetLink = `${frontendUrl}/reset-password?token=${resetTokenPlain}&email=${email}`;
+
+        await this.mailerService.sendMail({
+          to: email,
+          subject: 'Atur Ulang Password - Dapur MBG',
+          html: `
+            <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #ddd; max-width: 600px;">
+              <h3>Permintaan Atur Ulang Password</h3>
+              <p>Halo ${user.name}, klik tombol di bawah untuk reset password:</p>
+              <div style="margin: 20px 0;">
+                <a href="${resetLink}" style="background: #007bff; color: #fff; padding: 10px 20px; text-decoration: none; border-radius: 5px; display: inline-block;">Reset Password</a>
+              </div>
+              <p>Link berlaku selama 15 menit.</p>
+            </div>
+          `,
+        });
+
+        return genericResponse;
+      });
+    } catch (e) {
+      console.error('Forgot Password Error:', e);
+      throw new BadRequestException(
+        'Gagal memproses permintaan reset password.',
+      );
+    }
+  }
+
+  async resetPassword(dto: ResetPasswordDto) {
+    const user = await this.prisma.user.findUnique({
+      where: { email: dto.email },
+    });
+
+    if (!user || !user.resetToken || !user.resetTokenExpiresAt) {
+      throw new BadRequestException('Token tidak valid atau email tidak cocok');
+    }
+
+    if (new Date() > user.resetTokenExpiresAt) {
+      throw new BadRequestException('Token sudah kadaluwarsa');
+    }
+
+    const isTokenValid = await bcrypt.compare(dto.token, user.resetToken);
+    if (!isTokenValid) {
+      throw new BadRequestException('Token tidak valid');
+    }
+
+    const hashedPassword = await bcrypt.hash(dto.newPassword, 10);
 
     await this.prisma.user.update({
       where: { id: user.id },
       data: {
-        otpHash: otpHash,
-        otpExpiresAt: expiration,
+        password: hashedPassword,
+        resetToken: null,
+        resetTokenExpiresAt: null,
+        refreshToken: null,
       },
     });
 
-    try {
-      await this.mailerService.sendMail({
-        to: email,
-        subject: 'Kode Verifikasi Masuk - Dapur MBG',
-        html: `
-          <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #ddd;">
-            <h3 style="color: #333;">Halo, ${user.name}</h3>
-            <p>Anda meminta kode verifikasi untuk masuk ke aplikasi Manajemen Dapur MBG.</p>
-            <p>Gunakan kode berikut:</p>
-            <h1 style="color: #0056b3; letter-spacing: 5px; font-size: 32px;">${otp}</h1>
-            <p>Kode ini berlaku selama <strong>5 menit</strong>.</p>
-            <hr />
-            <p style="font-size: 12px; color: #777;">Jika Anda tidak merasa meminta kode ini, abaikan email ini.</p>
-          </div>
-        `,
-      });
-    } catch (error) {
-      console.error('Gagal kirim email:', error);
-      throw new BadRequestException(
-        'Gagal mengirim email OTP. Cek konfigurasi server.',
-      );
+    return {
+      message:
+        'Password berhasil diperbarui. Sesi aktif lainnya telah dihentikan, silakan login kembali.',
+    };
+  }
+
+  async getTokens(userId: string, email: string, role: string) {
+    const payload = { sub: userId, email, role };
+    const [at, rt] = await Promise.all([
+      this.jwtService.signAsync(payload, {
+        secret: this.configService.get<string>('JWT_SECRET'),
+        expiresIn: '15m',
+      }),
+      this.jwtService.signAsync(payload, {
+        secret: this.configService.get<string>('JWT_REFRESH_SECRET'),
+        expiresIn: '7d',
+      }),
+    ]);
+    return { access_token: at, refresh_token: rt };
+  }
+
+  async updateRefreshTokenHash(userId: string, rt: string) {
+    const hash = await bcrypt.hash(rt, 10);
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { refreshToken: hash },
+    });
+  }
+
+  async requestOtp(email: string) {
+    const user = await this.usersService.findOneByEmail(email);
+
+    if (!user || !user.isActive) {
+      return { message: 'Jika email terdaftar, OTP telah dikirim.' };
     }
 
-    return { message: 'OTP telah dikirim ke email Anda' };
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    const otpHash = await bcrypt.hash(otp, 10);
+    const expiration = new Date();
+    expiration.setMinutes(expiration.getMinutes() + 5);
+
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        await tx.user.update({
+          where: { id: user.id },
+          data: { otpHash, otpExpiresAt: expiration },
+        });
+
+        await this.mailerService.sendMail({
+          to: email,
+          subject: 'Kode Verifikasi - Dapur MBG',
+          html: `<h3>Kode OTP Anda: ${otp}</h3><p>Berlaku selama 5 menit.</p>`,
+        });
+
+        return { message: 'Jika email terdaftar, OTP telah dikirim.' };
+      });
+    } catch (e) {
+      console.error('OTP Request Error:', e);
+      throw new BadRequestException('Gagal mengirim email OTP.');
+    }
   }
 
   async verifyOtp(email: string, otpInput: string) {
     const user = await this.usersService.findOneByEmail(email);
-    if (!user) throw new UnauthorizedException('User tidak ditemukan');
 
-    if (!user.otpHash || !user.otpExpiresAt) {
-      throw new BadRequestException('Silakan request OTP ulang');
-    }
-
-    if (new Date() > user.otpExpiresAt) {
-      throw new BadRequestException('OTP sudah kadaluwarsa. Minta baru.');
+    if (
+      !user ||
+      !user.otpHash ||
+      !user.otpExpiresAt ||
+      new Date() > user.otpExpiresAt
+    ) {
+      throw new BadRequestException('OTP tidak valid/kadaluwarsa');
     }
 
     const isMatch = await bcrypt.compare(otpInput, user.otpHash);
-    if (!isMatch) {
-      throw new UnauthorizedException('Kode OTP salah');
-    }
+    if (!isMatch) throw new UnauthorizedException('Kode OTP salah');
 
     await this.prisma.user.update({
       where: { id: user.id },
       data: { otpHash: null, otpExpiresAt: null },
     });
 
-    return this.generateToken(user);
+    const tokens = await this.getTokens(user.id, user.email, user.role);
+    await this.updateRefreshTokenHash(user.id, tokens.refresh_token);
+
+    return {
+      user: { id: user.id, name: user.name, role: user.role },
+      backendTokens: tokens,
+    };
   }
 
   async changePassword(userId: string, dto: ChangePasswordDto) {
     const user = await this.prisma.user.findUnique({ where: { id: userId } });
+
     if (!user) throw new UnauthorizedException('User tidak ditemukan');
 
     const isMatch = await bcrypt.compare(dto.oldPassword, user.password);
@@ -123,65 +266,15 @@ export class AuthService {
 
     await this.prisma.user.update({
       where: { id: userId },
-      data: { password: hashedNew },
-    });
-
-    return { message: 'Password berhasil diubah' };
-  }
-
-  async forgotPassword(email: string) {
-    const user = await this.usersService.findOneByEmail(email);
-    if (!user) throw new BadRequestException('Email tidak terdaftar');
-
-    const tempPassword = this.usersService.generateStrongPassword(12);
-
-    const hashed = await bcrypt.hash(tempPassword, 10);
-
-    await this.prisma.user.update({
-      where: { id: user.id },
-      data: { password: hashed },
-    });
-
-    try {
-      await this.mailerService.sendMail({
-        to: email,
-        subject: 'Reset Password - Dapur MBG',
-        html: `
-           <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #ddd;">
-             <h3 style="color: #333;">Permintaan Reset Password</h3>
-             <p>Halo ${user.name}, kami menerima permintaan reset password untuk akun Anda.</p>
-             <p>Password sementara Anda adalah:</p>
-             <h2 style="color: #d9534f; background: #f9f9f9; padding: 10px; display: inline-block;">${tempPassword}</h2>
-             <p>Segera login dan ganti password Anda demi keamanan.</p>
-             <hr />
-             <p style="font-size: 12px; color: #777;">Jika bukan Anda yang meminta, abaikan email ini.</p>
-           </div>
-        `,
-      });
-    } catch (e) {
-      console.error('Gagal kirim email reset password:', e);
-      throw new BadRequestException('Gagal mengirim email reset password');
-    }
-
-    return { message: 'Password baru telah dikirim ke email.' };
-  }
-
-  private async generateToken(user: any) {
-    const payload = {
-      sub: user.id,
-      email: user.email,
-      role: user.role,
-      branchId: user.branchId,
-    };
-    return {
-      access_token: await this.jwtService.signAsync(payload),
-      user: {
-        id: user.id,
-        name: user.name,
-        role: user.role,
-        branchId: user.branchId,
-        profilePicture: user.profilePicture,
+      data: {
+        password: hashedNew,
+        refreshToken: null,
       },
+    });
+
+    return {
+      message:
+        'Password berhasil diubah. Silakan login kembali dengan password baru.',
     };
   }
 }

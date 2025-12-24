@@ -45,7 +45,11 @@ model User {
   role     Role
   isActive Boolean @default(true)
 
+  refreshToken   String?
   profilePicture String?
+
+  resetToken          String?   @unique
+  resetTokenExpiresAt DateTime?
 
   branchId String?
   branch   Branch? @relation(fields: [branchId], references: [id])
