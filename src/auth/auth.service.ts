@@ -26,10 +26,22 @@ export class AuthService {
 
   async login(email: string, pass: string) {
     const user = await this.usersService.findOneByEmail(email);
-    if (!user) throw new UnauthorizedException('Email tidak ditemukan');
+
+    if (!user) {
+      throw new UnauthorizedException('Email tidak ditemukan');
+    }
 
     const isMatch = await bcrypt.compare(pass, user.password);
-    if (!isMatch) throw new UnauthorizedException('Password salah');
+    if (!isMatch) {
+      await this.prisma.logActivity.create({
+        data: {
+          userId: user.id,
+          action: 'LOGIN_FAILED',
+          details: { reason: 'Invalid password attempt' },
+        },
+      });
+      throw new UnauthorizedException('Password salah');
+    }
 
     if (!user.isActive) {
       throw new UnauthorizedException('Akun Anda telah dinonaktifkan.');
@@ -37,6 +49,14 @@ export class AuthService {
 
     const tokens = await this.getTokens(user.id, user.email, user.role);
     await this.updateRefreshTokenHash(user.id, tokens.refresh_token);
+
+    await this.prisma.logActivity.create({
+      data: {
+        userId: user.id,
+        action: 'LOGIN_SUCCESS',
+        details: { loginAt: new Date() },
+      },
+    });
 
     return {
       user: {
@@ -55,6 +75,14 @@ export class AuthService {
       where: { id: userId, refreshToken: { not: null } },
       data: { refreshToken: null },
     });
+
+    await this.prisma.logActivity.create({
+      data: {
+        userId: userId,
+        action: 'LOGOUT',
+      },
+    });
+
     return { message: 'Logout berhasil' };
   }
 
@@ -81,15 +109,13 @@ export class AuthService {
 
     const genericResponse = {
       message:
-        'Jika email terdaftar, instruksi reset password telah dikirim.',
+        'Jika email terdaftar di sistem kami, instruksi reset password telah dikirim.',
     };
 
     if (!user) return genericResponse;
 
     const resetTokenPlain = crypto.randomBytes(32).toString('hex');
-
     const resetTokenHash = await bcrypt.hash(resetTokenPlain, 10);
-
     const expiry = new Date();
     expiry.setMinutes(expiry.getMinutes() + 15);
 
@@ -103,9 +129,16 @@ export class AuthService {
           },
         });
 
+        await tx.logActivity.create({
+          data: {
+            userId: user.id,
+            action: 'FORGOT_PASSWORD_REQUEST',
+            details: { email },
+          },
+        });
+
         const frontendUrl =
           this.configService.get('FRONTEND_URL') || 'http://localhost:3000';
-        // Kirim Token MENTAH ke URL
         const resetLink = `${frontendUrl}/reset-password?token=${resetTokenPlain}&email=${email}`;
 
         await this.mailerService.sendMail({
@@ -139,7 +172,9 @@ export class AuthService {
     });
 
     if (!user || !user.resetToken || !user.resetTokenExpiresAt) {
-      throw new BadRequestException('Token tidak valid atau email tidak cocok');
+      throw new BadRequestException(
+        'Permintaan atur ulang password tidak valid.',
+      );
     }
 
     if (new Date() > user.resetTokenExpiresAt) {
@@ -153,20 +188,35 @@ export class AuthService {
 
     const hashedPassword = await bcrypt.hash(dto.newPassword, 10);
 
-    await this.prisma.user.update({
-      where: { id: user.id },
-      data: {
-        password: hashedPassword,
-        resetToken: null,
-        resetTokenExpiresAt: null,
-        refreshToken: null,
-      },
-    });
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        await tx.user.update({
+          where: { id: user.id },
+          data: {
+            password: hashedPassword,
+            resetToken: null,
+            resetTokenExpiresAt: null,
+            refreshToken: null,
+          },
+        });
 
-    return {
-      message:
-        'Password berhasil diperbarui. Sesi aktif lainnya telah dihentikan, silakan login kembali.',
-    };
+        await tx.logActivity.create({
+          data: {
+            userId: user.id,
+            action: 'RESET_PASSWORD_SUCCESS',
+            details: { at: new Date() },
+          },
+        });
+
+        return {
+          message:
+            'Password berhasil diperbarui. Sesi aktif lainnya telah dihentikan, silakan login kembali.',
+        };
+      });
+    } catch (error) {
+      console.error('Reset Password Error:', error);
+      throw new BadRequestException('Gagal memperbarui password.');
+    }
   }
 
   async getTokens(userId: string, email: string, role: string) {
@@ -211,6 +261,13 @@ export class AuthService {
           data: { otpHash, otpExpiresAt: expiration },
         });
 
+        await tx.logActivity.create({
+          data: {
+            userId: user.id,
+            action: 'OTP_REQUESTED',
+          },
+        });
+
         await this.mailerService.sendMail({
           to: email,
           subject: 'Kode Verifikasi - Dapur MBG',
@@ -240,6 +297,13 @@ export class AuthService {
     const isMatch = await bcrypt.compare(otpInput, user.otpHash);
     if (!isMatch) throw new UnauthorizedException('Kode OTP salah');
 
+    await this.prisma.logActivity.create({
+      data: {
+        userId: user.id,
+        action: 'OTP_VERIFIED_SUCCESS',
+      },
+    });
+
     await this.prisma.user.update({
       where: { id: user.id },
       data: { otpHash: null, otpExpiresAt: null },
@@ -260,21 +324,43 @@ export class AuthService {
     if (!user) throw new UnauthorizedException('User tidak ditemukan');
 
     const isMatch = await bcrypt.compare(dto.oldPassword, user.password);
-    if (!isMatch) throw new BadRequestException('Password lama salah');
+    if (!isMatch) {
+      await this.prisma.logActivity.create({
+        data: {
+          userId: userId,
+          action: 'PASSWORD_CHANGE_FAILED',
+          details: { reason: 'Old password incorrect' },
+        },
+      });
+      throw new BadRequestException('Password lama salah');
+    }
 
     const hashedNew = await bcrypt.hash(dto.newPassword, 10);
 
-    await this.prisma.user.update({
-      where: { id: userId },
-      data: {
-        password: hashedNew,
-        refreshToken: null,
-      },
-    });
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        await tx.user.update({
+          where: { id: userId },
+          data: {
+            password: hashedNew,
+            refreshToken: null,
+          },
+        });
 
-    return {
-      message:
-        'Password berhasil diubah. Silakan login kembali dengan password baru.',
-    };
+        await tx.logActivity.create({
+          data: {
+            userId: userId,
+            action: 'PASSWORD_CHANGE_MANUAL_SUCCESS',
+          },
+        });
+
+        return {
+          message:
+            'Password berhasil diubah. Silakan login kembali dengan password baru.',
+        };
+      });
+    } catch (error) {
+      throw new BadRequestException('Gagal mengubah password.');
+    }
   }
 }

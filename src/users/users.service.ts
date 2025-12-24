@@ -11,7 +11,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { MailerService } from '@nestjs-modules/mailer';
 import * as bcrypt from 'bcrypt';
 import * as crypto from 'crypto';
-import { Prisma } from '@prisma/client';
+import { Prisma, Role } from '@prisma/client';
 import { ConfigService } from '@nestjs/config';
 
 @Injectable()
@@ -45,45 +45,112 @@ export class UsersService {
       .join('');
   }
 
-  async create(createUserDto: CreateUserDto) {
-    const existingUser = await this.prisma.user.findUnique({
-      where: { email: createUserDto.email },
-    });
-    if (existingUser) throw new ConflictException('Email sudah terdaftar');
+  async create(createUserDto: CreateUserDto, adminId?: string) {
+    if (
+      (createUserDto.role === Role.ADMIN_CABANG ||
+        createUserDto.role === Role.KURIR) &&
+      !createUserDto.branchId
+    ) {
+      throw new BadRequestException(
+        'User dengan role Admin Cabang atau Kurir WAJIB memiliki Branch ID (Penempatan Tugas).',
+      );
+    }
 
-    const randomPassword = this.generateStrongPassword(12);
-    const hashedPassword = await bcrypt.hash(randomPassword, 10);
+    if (createUserDto.role === Role.ADMIN_PUSAT && createUserDto.branchId) {
+      createUserDto.branchId = undefined;
+    }
+
+    const { email, phoneNumber, identityNumber } = createUserDto;
+
+    const existingUser = await this.prisma.user.findFirst({
+      where: {
+        OR: [{ email }, { phoneNumber }, { identityNumber }],
+      },
+    });
+
+    if (existingUser) {
+      if (existingUser.email === email) {
+        throw new ConflictException('Email sudah terdaftar dalam sistem');
+      }
+      if (existingUser.phoneNumber === phoneNumber) {
+        throw new ConflictException('Nomor HP sudah terdaftar dalam sistem');
+      }
+      if (existingUser.identityNumber === identityNumber) {
+        throw new ConflictException('NIK sudah terdaftar dalam sistem');
+      }
+    }
+
+    const temporaryPassword = crypto.randomBytes(32).toString('hex');
+    const hashedPassword = await bcrypt.hash(temporaryPassword, 10);
+
+    const activationTokenPlain = crypto.randomBytes(32).toString('hex');
+    const activationTokenHash = await bcrypt.hash(activationTokenPlain, 10);
+
+    const expiry = new Date();
+    expiry.setHours(expiry.getHours() + 24);
 
     try {
       return await this.prisma.$transaction(async (tx) => {
         const newUser = await tx.user.create({
-          data: { ...createUserDto, password: hashedPassword, isActive: true },
+          data: {
+            ...createUserDto,
+            password: hashedPassword,
+            isActive: true,
+            resetToken: activationTokenHash,
+            resetTokenExpiresAt: expiry,
+          },
         });
 
-        await this.sendCredentialEmail(newUser, randomPassword);
+        await tx.logActivity.create({
+          data: {
+            userId: adminId || newUser.id,
+            action: 'CREATE_USER_LINK_SENT',
+            details: {
+              targetUserId: newUser.id,
+              targetEmail: newUser.email,
+              targetNik: newUser.identityNumber,
+              role: newUser.role,
+              branchId: newUser.branchId,
+            },
+          },
+        });
 
-        const { password, ...result } = newUser;
+        await this.sendActivationEmail(newUser, activationTokenPlain);
+
+        const { password, resetToken, ...result } = newUser;
         return result;
       });
     } catch (error) {
       console.error('Create User Error:', error);
+
+      if (error instanceof BadRequestException) {
+        throw error;
+      }
       throw new BadRequestException(
-        'Gagal membuat user karena sistem email bermasalah.',
+        'Gagal membuat user karena masalah sistem atau pengiriman email.',
       );
     }
   }
 
-  private async sendCredentialEmail(user: any, pass: string) {
+  private async sendActivationEmail(user: any, token: string) {
+    const frontendUrl =
+      this.configService.get('FRONTEND_URL') || 'http://localhost:3000';
+    const activationLink = `${frontendUrl}/reset-password?token=${token}&email=${user.email}`;
+
     await this.mailerService.sendMail({
       to: user.email,
-      subject: 'Kredensial Akun - Dapur MBG',
+      subject: 'Aktivasi Akun - Dapur MBG',
       html: `
-          <div style="font-family: sans-serif; padding: 20px; border: 1px solid #eee;">
-            <h3>Halo, ${user.name}</h3>
-            <p>Akun Anda telah dibuat oleh Admin. Berikut adalah password sementara Anda:</p>
-            <h2 style="color: #2c3e50; background: #ecf0f1; padding: 10px; display: inline-block;">${pass}</h2>
-            <p>Role: <b>${user.role}</b></p>
-            <p style="color: red;">Segera ganti password Anda setelah login pertama kali demi keamanan.</p>
+          <div style="font-family: sans-serif; padding: 20px; border: 1px solid #eee; max-width: 600px;">
+            <h2 style="color: #2c3e50;">Halo, ${user.name}!</h2>
+            <p>Akun Anda di <b>Manajemen Dapur MBG</b> telah berhasil didaftarkan oleh Admin.</p>
+            <p>Silakan klik tombol di bawah ini untuk membuat password Anda dan mengaktifkan akun:</p>
+            <div style="margin: 30px 0; text-align: center;">
+              <a href="${activationLink}" style="background-color: #27ae60; color: white; padding: 12px 25px; text-decoration: none; border-radius: 5px; font-weight: bold; display: inline-block;">Buat Password Saya</a>
+            </div>
+            <p>Link ini berlaku selama 24 jam. Segera aktivasi akun Anda demi keamanan.</p>
+            <hr style="border: none; border-top: 1px solid #eee; margin: 20px 0;"/>
+            <p style="font-size: 12px; color: #7f8c8d;">Role Anda: <b>${user.role}</b><br>NIK: ${user.identityNumber}</p>
           </div>
         `,
     });
@@ -91,13 +158,12 @@ export class UsersService {
 
   async forceResetPassword(id: string) {
     const user = await this.findOne(id);
-
     const resetTokenPlain = crypto.randomBytes(32).toString('hex');
-
     const resetTokenHash = await bcrypt.hash(resetTokenPlain, 10);
 
     const expiry = new Date();
     expiry.setMinutes(expiry.getMinutes() + 30);
+
     try {
       return await this.prisma.$transaction(async (tx) => {
         await tx.user.update({
@@ -109,9 +175,16 @@ export class UsersService {
           },
         });
 
+        await tx.logActivity.create({
+          data: {
+            userId: user.id,
+            action: 'FORCE_RESET_BY_ADMIN',
+            details: { targetEmail: user.email, expiry },
+          },
+        });
+
         const frontendUrl =
           this.configService.get('FRONTEND_URL') || 'http://localhost:3000';
-        // Kirim Token PLAIN ke URL email
         const resetLink = `${frontendUrl}/reset-password?token=${resetTokenPlain}&email=${user.email}`;
 
         await this.mailerService.sendMail({
@@ -149,13 +222,14 @@ export class UsersService {
     const { search, role, branchId } = filter;
     const where: Prisma.UserWhereInput = {
       AND: [
-        role ? { role: role } : {},
-        branchId ? { branchId: branchId } : {},
+        role ? { role } : {},
+        branchId ? { branchId } : {},
         search
           ? {
               OR: [
                 { name: { contains: search, mode: 'insensitive' } },
                 { email: { contains: search, mode: 'insensitive' } },
+                { identityNumber: { contains: search, mode: 'insensitive' } },
               ],
             }
           : {},
@@ -188,7 +262,6 @@ export class UsersService {
     if (updateUserDto.password) {
       updateUserDto.password = await bcrypt.hash(updateUserDto.password, 10);
     }
-
     return this.prisma.user.update({
       where: { id },
       data: {
@@ -208,10 +281,7 @@ export class UsersService {
   async remove(id: string) {
     return this.prisma.user.update({
       where: { id },
-      data: {
-        isActive: false,
-        refreshToken: null,
-      },
+      data: { isActive: false, refreshToken: null },
     });
   }
 }

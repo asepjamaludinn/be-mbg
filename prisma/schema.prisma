@@ -45,6 +45,9 @@ model User {
   role     Role
   isActive Boolean @default(true)
 
+  phoneNumber    String? @unique
+  identityNumber String? @unique
+
   refreshToken   String?
   profilePicture String?
 

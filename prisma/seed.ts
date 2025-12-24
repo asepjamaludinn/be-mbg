@@ -14,11 +14,24 @@ async function main() {
     process.exit(1);
   }
 
-  const existingUser = await prisma.user.findUnique({ where: { email } });
+  const hashedPassword = await bcrypt.hash(password, 10);
 
-  if (!existingUser) {
-    const hashedPassword = await bcrypt.hash(password, 10);
+  const superAdmin = await prisma.user.findFirst({
+    where: { role: Role.ADMIN_PUSAT },
+  });
 
+  if (superAdmin) {
+    await prisma.user.update({
+      where: { id: superAdmin.id },
+      data: {
+        email: email,
+        password: hashedPassword,
+        name: 'Super Admin Pusat',
+        isActive: true,
+      },
+    });
+    console.log(`Super Admin updated: ${email}`);
+  } else {
     await prisma.user.create({
       data: {
         email,
@@ -28,10 +41,7 @@ async function main() {
         isActive: true,
       },
     });
-
     console.log(`Super Admin created: ${email}`);
-  } else {
-    console.log('Super Admin already exists.');
   }
 }
 
