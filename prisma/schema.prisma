@@ -45,6 +45,8 @@ model User {
   role     Role
   isActive Boolean @default(true)
 
+  profilePicture String?
+
   branchId String?
   branch   Branch? @relation(fields: [branchId], references: [id])
 

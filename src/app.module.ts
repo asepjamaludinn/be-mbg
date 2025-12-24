@@ -1,6 +1,5 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { MailerModule } from '@nestjs-modules/mailer';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { UsersModule } from './users/users.module';
@@ -10,6 +9,8 @@ import { StocksModule } from './stocks/stocks.module';
 import { RequestsModule } from './requests/requests.module';
 import { DistributionsModule } from './distributions/distributions.module';
 import { PrismaModule } from './prisma/prisma.module';
+import { MailModule } from './mail/mail.module';
+import { UploadsModule } from './uploads/uploads.module';
 
 @Module({
   imports: [
@@ -17,21 +18,8 @@ import { PrismaModule } from './prisma/prisma.module';
       isGlobal: true,
     }),
 
-    MailerModule.forRoot({
-      transport: {
-        host: 'smtp.gmail.com',
-        port: 465,
-        secure: true,
-        auth: {
-          user: process.env.MAIL_USER,
-          pass: process.env.MAIL_PASS,
-        },
-      },
-      defaults: {
-        from: '"Sistem Dapur MBG" <no-reply@mbg.go.id>',
-      },
-    }),
-
+    MailModule,
+    UploadsModule,
     UsersModule,
     AuthModule,
     MaterialsModule,

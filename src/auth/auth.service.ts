@@ -6,10 +6,9 @@ import {
 import { UsersService } from '../users/users.service';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcrypt';
-import { CreateAuthDto } from './dto/create-auth.dto';
-import { UpdateAuthDto } from './dto/update-auth.dto';
 import { MailerService } from '@nestjs-modules/mailer';
 import { PrismaService } from '../prisma/prisma.service';
+import { ChangePasswordDto } from './dto/change-password.dto';
 
 @Injectable()
 export class AuthService {
@@ -113,6 +112,60 @@ export class AuthService {
     return this.generateToken(user);
   }
 
+  async changePassword(userId: string, dto: ChangePasswordDto) {
+    const user = await this.prisma.user.findUnique({ where: { id: userId } });
+    if (!user) throw new UnauthorizedException('User tidak ditemukan');
+
+    const isMatch = await bcrypt.compare(dto.oldPassword, user.password);
+    if (!isMatch) throw new BadRequestException('Password lama salah');
+
+    const hashedNew = await bcrypt.hash(dto.newPassword, 10);
+
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { password: hashedNew },
+    });
+
+    return { message: 'Password berhasil diubah' };
+  }
+
+  async forgotPassword(email: string) {
+    const user = await this.usersService.findOneByEmail(email);
+    if (!user) throw new BadRequestException('Email tidak terdaftar');
+
+    const tempPassword = this.usersService.generateStrongPassword(12);
+
+    const hashed = await bcrypt.hash(tempPassword, 10);
+
+    await this.prisma.user.update({
+      where: { id: user.id },
+      data: { password: hashed },
+    });
+
+    try {
+      await this.mailerService.sendMail({
+        to: email,
+        subject: 'Reset Password - Dapur MBG',
+        html: `
+           <div style="font-family: Arial, sans-serif; padding: 20px; border: 1px solid #ddd;">
+             <h3 style="color: #333;">Permintaan Reset Password</h3>
+             <p>Halo ${user.name}, kami menerima permintaan reset password untuk akun Anda.</p>
+             <p>Password sementara Anda adalah:</p>
+             <h2 style="color: #d9534f; background: #f9f9f9; padding: 10px; display: inline-block;">${tempPassword}</h2>
+             <p>Segera login dan ganti password Anda demi keamanan.</p>
+             <hr />
+             <p style="font-size: 12px; color: #777;">Jika bukan Anda yang meminta, abaikan email ini.</p>
+           </div>
+        `,
+      });
+    } catch (e) {
+      console.error('Gagal kirim email reset password:', e);
+      throw new BadRequestException('Gagal mengirim email reset password');
+    }
+
+    return { message: 'Password baru telah dikirim ke email.' };
+  }
+
   private async generateToken(user: any) {
     const payload = {
       sub: user.id,
@@ -127,27 +180,8 @@ export class AuthService {
         name: user.name,
         role: user.role,
         branchId: user.branchId,
+        profilePicture: user.profilePicture,
       },
     };
-  }
-
-  async create(createAuthDto: CreateAuthDto) {
-    return this.usersService.create(createAuthDto);
-  }
-
-  findAll() {
-    return this.usersService.findAll();
-  }
-
-  findOne(id: string) {
-    return this.usersService.findOne(id);
-  }
-
-  async update(id: string, updateAuthDto: UpdateAuthDto) {
-    return this.usersService.update(id, updateAuthDto);
-  }
-
-  remove(id: string) {
-    return this.usersService.remove(id);
   }
 }
