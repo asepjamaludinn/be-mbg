@@ -3,6 +3,8 @@ import {
   ConflictException,
   NotFoundException,
   BadRequestException,
+  ForbiddenException,
+  UnauthorizedException,
 } from '@nestjs/common';
 import { CreateUserDto } from './dto/create-user.dto';
 import { UpdateUserDto } from './dto/update-user.dto';
@@ -45,7 +47,28 @@ export class UsersService {
       .join('');
   }
 
-  async create(createUserDto: CreateUserDto, adminId?: string) {
+  async create(createUserDto: CreateUserDto, adminId: string) {
+    const adminAccount = await this.prisma.user.findUnique({
+      where: { id: adminId },
+    });
+
+    if (!adminAccount)
+      throw new UnauthorizedException('Admin tidak ditemukan.');
+
+    if (adminAccount.role === Role.ADMIN_CABANG) {
+      if (createUserDto.role !== Role.KURIR) {
+        throw new ForbiddenException(
+          'Wewenang terbatas: Admin Cabang hanya diperbolehkan mendaftarkan akun KURIR.',
+        );
+      }
+
+      if (createUserDto.branchId !== adminAccount.branchId) {
+        throw new ForbiddenException(
+          'Wewenang terbatas: Anda hanya bisa mendaftarkan user untuk kantor cabang Anda sendiri.',
+        );
+      }
+    }
+
     if (
       (createUserDto.role === Role.ADMIN_CABANG ||
         createUserDto.role === Role.KURIR) &&
@@ -61,7 +84,6 @@ export class UsersService {
     }
 
     const { email, phoneNumber, identityNumber } = createUserDto;
-
     const existingUser = await this.prisma.user.findFirst({
       where: {
         OR: [{ email }, { phoneNumber }, { identityNumber }],
@@ -69,23 +91,18 @@ export class UsersService {
     });
 
     if (existingUser) {
-      if (existingUser.email === email) {
-        throw new ConflictException('Email sudah terdaftar dalam sistem');
-      }
-      if (existingUser.phoneNumber === phoneNumber) {
-        throw new ConflictException('Nomor HP sudah terdaftar dalam sistem');
-      }
-      if (existingUser.identityNumber === identityNumber) {
-        throw new ConflictException('NIK sudah terdaftar dalam sistem');
-      }
+      if (existingUser.email === email)
+        throw new ConflictException('Email sudah terdaftar dalam sistem.');
+      if (existingUser.phoneNumber === phoneNumber)
+        throw new ConflictException('Nomor HP sudah terdaftar dalam sistem.');
+      if (existingUser.identityNumber === identityNumber)
+        throw new ConflictException('NIK sudah terdaftar dalam sistem.');
     }
 
     const temporaryPassword = crypto.randomBytes(32).toString('hex');
     const hashedPassword = await bcrypt.hash(temporaryPassword, 10);
-
     const activationTokenPlain = crypto.randomBytes(32).toString('hex');
     const activationTokenHash = await bcrypt.hash(activationTokenPlain, 10);
-
     const expiry = new Date();
     expiry.setHours(expiry.getHours() + 24);
 
@@ -103,7 +120,7 @@ export class UsersService {
 
         await tx.logActivity.create({
           data: {
-            userId: adminId || newUser.id,
+            userId: adminId,
             action: 'CREATE_USER_LINK_SENT',
             details: {
               targetUserId: newUser.id,
@@ -122,12 +139,14 @@ export class UsersService {
       });
     } catch (error) {
       console.error('Create User Error:', error);
-
-      if (error instanceof BadRequestException) {
+      if (
+        error instanceof ForbiddenException ||
+        error instanceof BadRequestException
+      ) {
         throw error;
       }
       throw new BadRequestException(
-        'Gagal membuat user karena masalah sistem atau pengiriman email.',
+        'Gagal membuat user karena kendala teknis atau pengiriman email.',
       );
     }
   }
@@ -160,7 +179,6 @@ export class UsersService {
     const user = await this.findOne(id);
     const resetTokenPlain = crypto.randomBytes(32).toString('hex');
     const resetTokenHash = await bcrypt.hash(resetTokenPlain, 10);
-
     const expiry = new Date();
     expiry.setMinutes(expiry.getMinutes() + 30);
 

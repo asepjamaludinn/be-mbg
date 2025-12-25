@@ -84,15 +84,18 @@ model Branch {
 }
 
 model Material {
-  id   String @id @default(uuid())
-  name String
-  unit String
+  id       String  @id @default(uuid())
+  name     String  @unique
+  unit     String
+  isActive Boolean @default(true)
 
   stocks       Stock[]
   requestItems RequestItem[]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  @@index([isActive, name])
 }
 
 model Stock {
