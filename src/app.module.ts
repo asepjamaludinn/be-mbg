@@ -13,6 +13,7 @@ import { DistributionsModule } from './distributions/distributions.module';
 import { PrismaModule } from './prisma/prisma.module';
 import { MailModule } from './mail/mail.module';
 import { UploadsModule } from './uploads/uploads.module';
+import { BranchesModule } from './branches/branches.module';
 
 @Module({
   imports: [
@@ -36,6 +37,7 @@ import { UploadsModule } from './uploads/uploads.module';
     RequestsModule,
     DistributionsModule,
     PrismaModule,
+    BranchesModule,
   ],
   controllers: [AppController],
   providers: [
