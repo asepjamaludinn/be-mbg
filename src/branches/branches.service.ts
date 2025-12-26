@@ -117,6 +117,8 @@ export class BranchesService {
         data: dto,
       });
 
+      const { createdAt, updatedAt, ...cleanBranchData } = branch;
+
       await tx.logActivity.create({
         data: {
           userId: adminId,
@@ -124,7 +126,7 @@ export class BranchesService {
           details: {
             id,
             updates: { ...dto },
-            before: { ...branch },
+            before: cleanBranchData,
           },
         },
       });

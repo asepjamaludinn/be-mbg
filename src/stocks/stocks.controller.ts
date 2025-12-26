@@ -1,34 +1,47 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  UseGuards,
+  Query,
+  Request,
+  ParseIntPipe,
+  DefaultValuePipe,
+  Param,
+} from '@nestjs/common';
 import { StocksService } from './stocks.service';
-import { CreateStockDto } from './dto/create-stock.dto';
-import { UpdateStockDto } from './dto/update-stock.dto';
+import { StockOpnameDto } from './dto/stock-opname.dto';
+import { StockFilterDto } from './dto/stock-filter.dto';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { RolesGuard } from '../auth/roles.guard';
+import { Roles } from '../auth/roles.decorator';
+import { Role } from '@prisma/client';
 
+@UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('stocks')
 export class StocksController {
   constructor(private readonly stocksService: StocksService) {}
 
-  @Post()
-  create(@Body() createStockDto: CreateStockDto) {
-    return this.stocksService.create(createStockDto);
+  @Roles(Role.ADMIN_PUSAT)
+  @Post('opname')
+  opname(@Body() dto: StockOpnameDto, @Request() req) {
+    return this.stocksService.stockOpname(dto, req.user.id);
   }
 
+  @Roles(Role.ADMIN_PUSAT, Role.ADMIN_CABANG)
   @Get()
-  findAll() {
-    return this.stocksService.findAll();
+  findAll(
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
+    @Query() filter: StockFilterDto,
+    @Request() req,
+  ) {
+    return this.stocksService.findAll(page, limit, filter, req.user);
   }
 
   @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.stocksService.findOne(+id);
-  }
-
-  @Patch(':id')
-  update(@Param('id') id: string, @Body() updateStockDto: UpdateStockDto) {
-    return this.stocksService.update(+id, updateStockDto);
-  }
-
-  @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.stocksService.remove(+id);
+  findOne(@Param('id') id: string, @Request() req) {
+    return this.stocksService.findOne(id, req.user);
   }
 }
