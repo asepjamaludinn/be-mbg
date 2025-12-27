@@ -13,12 +13,12 @@ import { ApiProperty } from '@nestjs/swagger';
 
 class RequestItemDto {
   @ApiProperty({ example: 'uuid-material-123', description: 'ID Material' })
-  @IsNotEmpty()
+  @IsNotEmpty({ message: 'Material ID wajib diisi' })
   @IsUUID()
   materialId: string;
 
   @ApiProperty({ example: 10, description: 'Jumlah permintaan' })
-  @IsNotEmpty()
+  @IsNotEmpty({ message: 'Qty wajib diisi' })
   @IsNumber()
   @Min(0.1, { message: 'Jumlah permintaan harus lebih dari 0' })
   qty: number;

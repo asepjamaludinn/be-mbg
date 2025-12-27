@@ -59,6 +59,16 @@ export class DistributionsController {
     return this.distributionsService.findAll(page, limit, filter, req.user);
   }
 
+  @Roles(Role.ADMIN_PUSAT, Role.ADMIN_CABANG)
+  @Get(':id')
+  @ApiOperation({
+    summary: 'Detail Distribusi',
+    description: 'Melihat detail pengiriman makanan berdasarkan ID',
+  })
+  findOne(@Param('id') id: string, @Request() req) {
+    return this.distributionsService.findOne(id, req.user);
+  }
+
   @Roles(Role.ADMIN_CABANG)
   @Patch(':id/return-containers')
   @ApiOperation({
