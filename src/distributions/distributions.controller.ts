@@ -1,34 +1,60 @@
-import { Controller, Get, Post, Body, Patch, Param, Delete } from '@nestjs/common';
+import {
+  Controller,
+  Get,
+  Post,
+  Body,
+  Patch,
+  Param,
+  UseGuards,
+  Query,
+  Request,
+  ParseIntPipe,
+  DefaultValuePipe,
+} from '@nestjs/common';
 import { DistributionsService } from './distributions.service';
 import { CreateDistributionDto } from './dto/create-distribution.dto';
-import { UpdateDistributionDto } from './dto/update-distribution.dto';
+import { UpdateDistributionStatusDto } from './dto/update-distribution-status.dto';
+import { DistributionFilterDto } from './dto/distribution-filter.dto';
+import { JwtAuthGuard } from '../auth/jwt-auth.guard';
+import { RolesGuard } from '../auth/roles.guard';
+import { Roles } from '../auth/roles.decorator';
+import { Role } from '@prisma/client';
 
+@UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('distributions')
 export class DistributionsController {
   constructor(private readonly distributionsService: DistributionsService) {}
 
+  @Roles(Role.ADMIN_CABANG)
   @Post()
-  create(@Body() createDistributionDto: CreateDistributionDto) {
-    return this.distributionsService.create(createDistributionDto);
+  create(@Body() createDto: CreateDistributionDto, @Request() req) {
+    return this.distributionsService.create(createDto, req.user.id);
   }
 
+  @Roles(Role.ADMIN_PUSAT, Role.ADMIN_CABANG)
   @Get()
-  findAll() {
-    return this.distributionsService.findAll();
+  findAll(
+    @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
+    @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
+    @Query() filter: DistributionFilterDto,
+    @Request() req,
+  ) {
+    return this.distributionsService.findAll(page, limit, filter, req.user);
   }
 
+  @Roles(Role.ADMIN_PUSAT, Role.ADMIN_CABANG)
   @Get(':id')
-  findOne(@Param('id') id: string) {
-    return this.distributionsService.findOne(+id);
+  findOne(@Param('id') id: string, @Request() req) {
+    return this.distributionsService.findOne(id, req.user);
   }
 
-  @Patch(':id')
-  update(@Param('id') id: string, @Body() updateDistributionDto: UpdateDistributionDto) {
-    return this.distributionsService.update(+id, updateDistributionDto);
-  }
-
-  @Delete(':id')
-  remove(@Param('id') id: string) {
-    return this.distributionsService.remove(+id);
+  @Roles(Role.ADMIN_CABANG)
+  @Patch(':id/return-containers')
+  updateReturn(
+    @Param('id') id: string,
+    @Body() dto: UpdateDistributionStatusDto,
+    @Request() req,
+  ) {
+    return this.distributionsService.updateReturnStatus(id, dto, req.user.id);
   }
 }

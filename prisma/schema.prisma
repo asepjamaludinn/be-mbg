@@ -111,6 +111,7 @@ model Stock {
 
   @@unique([materialId, branchId])
   @@index([branchId])
+  @@index([materialId])
 }
 
 model Request {
