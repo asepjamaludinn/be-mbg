@@ -19,7 +19,15 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
 import { Role } from '@prisma/client';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiTags,
+  ApiQuery,
+} from '@nestjs/swagger';
 
+@ApiTags('Branches')
+@ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('branches')
 export class BranchesController {
@@ -27,11 +35,14 @@ export class BranchesController {
 
   @Roles(Role.ADMIN_PUSAT)
   @Post()
+  @ApiOperation({ summary: 'Buat Cabang Baru' })
   create(@Body() createBranchDto: CreateBranchDto, @Request() req) {
     return this.branchesService.create(createBranchDto, req.user.id);
   }
 
   @Get()
+  @ApiOperation({ summary: 'List Cabang' })
+  @ApiQuery({ name: 'page', required: false, type: Number })
   findAll(
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
@@ -42,12 +53,14 @@ export class BranchesController {
   }
 
   @Get(':id')
+  @ApiOperation({ summary: 'Detail Cabang' })
   findOne(@Param('id') id: string) {
     return this.branchesService.findOne(id);
   }
 
   @Roles(Role.ADMIN_PUSAT)
   @Patch(':id')
+  @ApiOperation({ summary: 'Update Cabang' })
   update(
     @Param('id') id: string,
     @Body() updateBranchDto: UpdateBranchDto,
@@ -58,6 +71,7 @@ export class BranchesController {
 
   @Roles(Role.ADMIN_PUSAT)
   @Delete(':id')
+  @ApiOperation({ summary: 'Hapus Cabang' })
   remove(@Param('id') id: string, @Request() req) {
     return this.branchesService.remove(id, req.user.id);
   }

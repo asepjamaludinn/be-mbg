@@ -17,7 +17,15 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
 import { Role } from '@prisma/client';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiTags,
+  ApiQuery,
+} from '@nestjs/swagger';
 
+@ApiTags('Stocks')
+@ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('stocks')
 export class StocksController {
@@ -25,12 +33,15 @@ export class StocksController {
 
   @Roles(Role.ADMIN_PUSAT)
   @Post('opname')
+  @ApiOperation({ summary: 'Stock Opname (Create/Update Stock Manual)' })
   opname(@Body() dto: StockOpnameDto, @Request() req) {
     return this.stocksService.stockOpname(dto, req.user.id);
   }
 
   @Roles(Role.ADMIN_PUSAT, Role.ADMIN_CABANG)
   @Get()
+  @ApiOperation({ summary: 'List Stok' })
+  @ApiQuery({ name: 'page', required: false, type: Number })
   findAll(
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
@@ -41,6 +52,7 @@ export class StocksController {
   }
 
   @Get(':id')
+  @ApiOperation({ summary: 'Detail Stok' })
   findOne(@Param('id') id: string, @Request() req) {
     return this.stocksService.findOne(id, req.user);
   }

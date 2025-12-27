@@ -19,7 +19,15 @@ import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { RolesGuard } from '../auth/roles.guard';
 import { Roles } from '../auth/roles.decorator';
 import { Role } from '@prisma/client';
+import {
+  ApiBearerAuth,
+  ApiOperation,
+  ApiTags,
+  ApiQuery,
+} from '@nestjs/swagger';
 
+@ApiTags('Materials')
+@ApiBearerAuth()
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('materials')
 export class MaterialsController {
@@ -27,11 +35,14 @@ export class MaterialsController {
 
   @Roles(Role.ADMIN_PUSAT)
   @Post()
+  @ApiOperation({ summary: 'Tambah Material Baru' })
   create(@Body() createMaterialDto: CreateMaterialDto, @Request() req) {
     return this.materialsService.create(createMaterialDto, req.user.id);
   }
 
   @Get()
+  @ApiOperation({ summary: 'List Material' })
+  @ApiQuery({ name: 'page', required: false, type: Number })
   findAll(
     @Query('page', new DefaultValuePipe(1), ParseIntPipe) page: number,
     @Query('limit', new DefaultValuePipe(10), ParseIntPipe) limit: number,
@@ -51,13 +62,16 @@ export class MaterialsController {
       sortOrder,
     );
   }
+
   @Get(':id')
+  @ApiOperation({ summary: 'Detail Material' })
   findOne(@Param('id') id: string) {
     return this.materialsService.findOne(id);
   }
 
   @Roles(Role.ADMIN_PUSAT)
   @Patch(':id')
+  @ApiOperation({ summary: 'Update Material' })
   update(
     @Param('id') id: string,
     @Body() updateMaterialDto: UpdateMaterialDto,
@@ -68,6 +82,7 @@ export class MaterialsController {
 
   @Roles(Role.ADMIN_PUSAT)
   @Delete(':id')
+  @ApiOperation({ summary: 'Hapus Material' })
   remove(@Param('id') id: string, @Request() req) {
     return this.materialsService.remove(id, req.user.id);
   }
